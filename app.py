@@ -10,123 +10,66 @@ import time
 TOKEN = '8506261472:AAEFl-coVYJtnVjlILf04n5WJlaMNgqDv84'
 bot = telebot.TeleBot(TOKEN)
 
-# --- BANCO DE DADOS ---
 def conectar():
     conn = sqlite3.connect('vanthagem_pro.db', check_same_thread=False)
     cursor = conn.cursor()
+    # Adicionamos a coluna 'status' para saber se o cliente já entrou
     cursor.execute('''CREATE TABLE IF NOT EXISTS membros 
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                     grupo_id TEXT, grupo_nome TEXT, 
                     user_id TEXT, nome TEXT, 
-                    entrada TEXT, saida TEXT)''')
+                    entrada TEXT, saida TEXT, 
+                    duracao_txt TEXT, status TEXT)''')
     conn.commit()
     return conn
 
 conn = conectar()
 
-# --- MOTOR DE REMOÇÃO AUTOMÁTICA (RODA 24H) ---
-def monitor_expiracao():
+# --- MOTOR DE MONITORAMENTO (Entrada e Saída) ---
+def monitor_geral():
     while True:
         try:
             conn_thread = sqlite3.connect('vanthagem_pro.db')
             cursor = conn_thread.cursor()
             agora = datetime.now()
             
-            cursor.execute("SELECT id, grupo_id, user_id, nome, saida FROM membros")
-            membros = cursor.fetchall()
-            
-            for m in membros:
+            # 1. REMOVER QUEM JÁ EXPIROU
+            cursor.execute("SELECT id, grupo_id, user_id, nome, saida FROM membros WHERE status = 'Ativo'")
+            ativos = cursor.fetchall()
+            for m in ativos:
                 m_id, g_id, u_id, nome, data_saida = m
-                if data_saida == "Vitalício":
-                    continue
-                
+                if data_saida == "Vitalício": continue
                 limite = datetime.strptime(data_saida, "%d/%m/%Y %H:%M")
                 if agora >= limite:
-                    # Remove do Telegram
                     bot.ban_chat_member(g_id, u_id)
                     bot.unban_chat_member(g_id, u_id)
-                    # Remove do Banco
                     cursor.execute("DELETE FROM membros WHERE id = ?", (m_id,))
                     conn_thread.commit()
+
             conn_thread.close()
         except Exception as e:
             print(f"Erro no monitor: {e}")
-        time.sleep(60)
+        time.sleep(30)
 
-# Inicia o monitor em segundo plano apenas uma vez
-if 'monitor_running' not in st.session_state:
-    threading.Thread(target=monitor_expiracao, daemon=True).start()
-    st.session_state['monitor_running'] = True
-
-# --- INTERFACE VISUAL ---
-st.set_page_config(page_title="Vanthagem Assinaturas", layout="wide")
-
-# Estilo para esconder menus padrões do Streamlit e deixar mais clean
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .stButton>button {width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white;}
-    </style>
-    """, unsafe_allow_html=True)
-
-st.sidebar.title("💎 Vanthagem Assinaturas")
-aba = st.sidebar.selectbox("Ir para:", ["Dashboard Geral", "Adicionar Novo Membro"])
-
-if aba == "Dashboard Geral":
-    st.title("📊 Gestão de Grupos e Membros")
-    
-    df = pd.read_sql_query("SELECT * FROM membros", conn)
-    
-    if not df.empty:
-        # Calcular tempo restante em horas para a lógica das cores
-        def calc_horas(row):
-            if row['saida'] == "Vitalício": return 9999
-            saida = datetime.strptime(row['saida'], "%d/%m/%Y %H:%M")
-            restante = saida - datetime.now()
-            return restante.total_seconds() / 3600
-
-        df['horas_restantes'] = df.apply(calc_horas, axis=1)
-
-        # A lógica do fundo vermelho (Menos de 24h)
-        def highlight_expiring(row):
-            if row.horas_restantes <= 24:
-                return ['background-color: #ff4d4d; color: white; font-weight: bold'] * len(row)
-            return [''] * len(row)
-
-        # Preparar tabela limpa
-        display_df = df[['grupo_nome', 'nome', 'entrada', 'saida']].copy()
-        display_df.columns = ['Grupo', 'Membro', 'Data de Entrada', 'Expira em']
+# 2. DETECTAR ENTRADA NO GRUPO
+@bot.chat_member_handler()
+def monitorar_entrada(message):
+    new_member = message.new_chat_member
+    if new_member.status == 'member':
+        u_id = str(new_member.user.id)
+        g_id = str(message.chat.id)
         
-        st.dataframe(display_df.style.apply(highlight_expiring, axis=1), use_container_width=True)
-    else:
-        st.info("Nenhum membro ativo nos seus grupos.")
-
-elif aba == "Adicionar Novo Membro":
-    st.title("➕ Cadastrar Novo Cliente")
-    
-    with st.expander("Como pegar as informações?", expanded=False):
-        st.write("1. Adicione o bot no seu grupo como Admin.")
-        st.write("2. Para o ID do Grupo: Use o bot @RawDataBot no grupo.")
-        st.write("3. Para o ID do Usuário: Use o bot @userinfobot com o cliente.")
-
-    with st.form("cadastro"):
-        col1, col2 = st.columns(2)
-        with col1:
-            g_id = st.text_input("ID do Grupo (ex: -100...)")
-            g_nome = st.text_input("Nome do Grupo (ex: VIP Estratégias)")
-        with col2:
-            u_id = st.text_input("ID do Usuário (ID numérico do Telegram)")
-            u_nome = st.text_input("Nome do Cliente")
+        conn_in = sqlite3.connect('vanthagem_pro.db')
+        cursor = conn_in.cursor()
         
-        tempo = st.selectbox("Tempo de Permanência", 
-                            ["30 minutos", "1 hora", "1 semana", "15 dias", "30 dias", "60 dias", "90 dias", "1 ano", "2 anos", "Vitalício"])
+        # Procura se esse ID está na lista de "Pendente"
+        cursor.execute("SELECT id, duracao_txt FROM membros WHERE user_id = ? AND grupo_id = ? AND status = 'Pendente'", (u_id, g_id))
+        res = cursor.fetchone()
         
-        btn = st.form_submit_button("ADICIONAR AO SISTEMA")
-        
-        if btn:
+        if res:
+            m_id, duracao = res
             agora = datetime.now()
-            # Lógica de tempo
+            # Calcula a saída a partir de AGORA
             deltas = {
                 "30 minutos": timedelta(minutes=30), "1 hora": timedelta(hours=1),
                 "1 semana": timedelta(weeks=1), "15 dias": timedelta(days=15),
@@ -134,12 +77,60 @@ elif aba == "Adicionar Novo Membro":
                 "90 dias": timedelta(days=90), "1 ano": timedelta(days=365),
                 "2 anos": timedelta(days=730)
             }
-            
             data_entrada = agora.strftime("%d/%m/%Y %H:%M")
-            data_saida = (agora + deltas[tempo]).strftime("%d/%m/%Y %H:%M") if tempo != "Vitalício" else "Vitalício"
+            data_saida = (agora + deltas[duracao]).strftime("%d/%m/%Y %H:%M") if duracao != "Vitalício" else "Vitalício"
             
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, entrada, saida) VALUES (?,?,?,?,?,?)",
-                           (g_id, g_nome, u_id, u_nome, data_entrada, data_saida))
-            conn.commit()
-            st.success(f"✅ {u_nome} adicionado com sucesso ao grupo {g_nome}!")
+            cursor.execute("UPDATE membros SET entrada = ?, saida = ?, status = 'Ativo' WHERE id = ?", (data_entrada, data_saida, m_id))
+            conn_in.commit()
+        conn_in.close()
+
+# Inicia bot e monitor
+if 'bot_thread' not in st.session_state:
+    threading.Thread(target=monitor_geral, daemon=True).start()
+    threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=['chat_member']), daemon=True).start()
+    st.session_state['bot_thread'] = True
+
+# --- INTERFACE ---
+st.set_page_config(page_title="Vanthagem Assinaturas", layout="wide")
+
+st.sidebar.title("💎 Vanthagem Assinaturas")
+aba = st.sidebar.selectbox("Ir para:", ["Dashboard Geral", "Cadastrar Cliente"])
+
+if aba == "Dashboard Geral":
+    st.title("📊 Gestão de Membros")
+    df = pd.read_sql_query("SELECT grupo_nome, nome, status, entrada,埋saida FROM membros", conn)
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("Nenhum cliente no sistema.")
+
+elif aba == "Cadastrar Cliente":
+    st.title("➕ Gerar Acesso")
+    with st.form("cadastro"):
+        col1, col2 = st.columns(2)
+        with col1:
+            g_id = st.text_input("ID do Grupo (-100...)")
+            u_id = st.text_input("ID do Usuário (Cliente)")
+        with col2:
+            g_nome = st.text_input("Nome do Grupo")
+            u_nome = st.text_input("Nome do Cliente")
+        
+        tempo = st.selectbox("Tempo", ["30 minutos", "1 hora", "1 semana", "15 dias", "30 dias", "60 dias", "90 dias", "1 ano", "2 anos", "Vitalício"])
+        btn = st.form_submit_button("GERAR LINK E ADICIONAR")
+        
+        if btn:
+            try:
+                # Gera o link único no Telegram
+                link_obj = bot.create_chat_invite_link(g_id, member_limit=1)
+                link_final = link_obj.invite_link
+                
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, entrada, saida, duracao_txt, status) VALUES (?,?,?,?,?,?,?,?)",
+                               (g_id, g_nome, u_id, u_nome, "Aguardando", "Aguardando", tempo, "Pendente"))
+                conn.commit()
+                
+                st.success("✅ Cliente pré-cadastrado!")
+                st.code(f"Envie este link para o cliente:\n{link_final}", language="text")
+                st.warning("O cronômetro só começará a contar quando o cliente entrar no grupo.")
+            except Exception as e:
+                st.error(f"Erro ao gerar link: {e}. O bot é admin do grupo?")
