@@ -3,15 +3,16 @@ import telebot
 import sqlite3
 import pandas as pd
 from datetime import datetime, timedelta
+import threading
 import time
 
-# --- CONFIGURAÇÕES INICIAIS ---
+# --- CONFIGURAÇÕES DO BOT ---
 TOKEN = '8506261472:AAEFl-coVYJtnVjlILf04n5WJlaMNgqDv84'
 bot = telebot.TeleBot(TOKEN)
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
+# --- BANCO DE DADOS ---
 def conectar():
-    conn = sqlite3.connect('vanthagem.db', check_same_thread=False)
+    conn = sqlite3.connect('vanthagem_pro.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS membros 
                    (id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -23,77 +24,122 @@ def conectar():
 
 conn = conectar()
 
-# --- INTERFACE STREAMLIT (O SITE) ---
+# --- MOTOR DE REMOÇÃO AUTOMÁTICA (RODA 24H) ---
+def monitor_expiracao():
+    while True:
+        try:
+            conn_thread = sqlite3.connect('vanthagem_pro.db')
+            cursor = conn_thread.cursor()
+            agora = datetime.now()
+            
+            cursor.execute("SELECT id, grupo_id, user_id, nome, saida FROM membros")
+            membros = cursor.fetchall()
+            
+            for m in membros:
+                m_id, g_id, u_id, nome, data_saida = m
+                if data_saida == "Vitalício":
+                    continue
+                
+                limite = datetime.strptime(data_saida, "%d/%m/%Y %H:%M")
+                if agora >= limite:
+                    # Remove do Telegram
+                    bot.ban_chat_member(g_id, u_id)
+                    bot.unban_chat_member(g_id, u_id)
+                    # Remove do Banco
+                    cursor.execute("DELETE FROM membros WHERE id = ?", (m_id,))
+                    conn_thread.commit()
+            conn_thread.close()
+        except Exception as e:
+            print(f"Erro no monitor: {e}")
+        time.sleep(60)
+
+# Inicia o monitor em segundo plano apenas uma vez
+if 'monitor_running' not in st.session_state:
+    threading.Thread(target=monitor_expiracao, daemon=True).start()
+    st.session_state['monitor_running'] = True
+
+# --- INTERFACE VISUAL ---
 st.set_page_config(page_title="Vanthagem Assinaturas", layout="wide")
 
+# Estilo para esconder menus padrões do Streamlit e deixar mais clean
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stButton>button {width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white;}
+    </style>
+    """, unsafe_allow_html=True)
+
 st.sidebar.title("💎 Vanthagem Assinaturas")
-aba = st.sidebar.radio("Navegação", ["Dashboard Geral", "Gerenciar Grupos", "Adicionar Membro"])
+aba = st.sidebar.selectbox("Ir para:", ["Dashboard Geral", "Adicionar Novo Membro"])
 
 if aba == "Dashboard Geral":
-    st.title("📊 Painel de Controle")
+    st.title("📊 Gestão de Grupos e Membros")
     
-    # Carregar dados
     df = pd.read_sql_query("SELECT * FROM membros", conn)
     
     if not df.empty:
-        # Cálculo de tempo restante
-        def calcular_restante(data_saida):
-            if data_saida == "Vitalício": return 9999
-            saida = datetime.strptime(data_saida, "%d/%m/%Y %H:%M")
+        # Calcular tempo restante em horas para a lógica das cores
+        def calc_horas(row):
+            if row['saida'] == "Vitalício": return 9999
+            saida = datetime.strptime(row['saida'], "%d/%m/%Y %H:%M")
             restante = saida - datetime.now()
-            return restante.total_seconds() / 3600 # Retorna em horas
+            return restante.total_seconds() / 3600
 
-        df['Horas_Restantes'] = df['saida'].apply(calcular_restante)
+        df['horas_restantes'] = df.apply(calc_horas, axis=1)
 
-        # FUNÇÃO DO FUNDO VERMELHO (Sua exigência principal)
-        def style_red(row):
-            if row.Horas_Restantes <= 24:
-                return ['background-color: #ff4d4d; color: white'] * len(row)
+        # A lógica do fundo vermelho (Menos de 24h)
+        def highlight_expiring(row):
+            if row.horas_restantes <= 24:
+                return ['background-color: #ff4d4d; color: white; font-weight: bold'] * len(row)
             return [''] * len(row)
 
-        # Exibição da Tabela
-        st.subheader("Lista de Membros Ativos")
-        st.write("Linhas em vermelho indicam expiração em menos de 24h.")
-        
-        # Limpando a tabela para exibição
+        # Preparar tabela limpa
         display_df = df[['grupo_nome', 'nome', 'entrada', 'saida']].copy()
-        display_df.columns = ['Grupo', 'Cliente', 'Data de Entrada', 'Data de Expiração']
+        display_df.columns = ['Grupo', 'Membro', 'Data de Entrada', 'Expira em']
         
-        st.table(display_df.style.apply(style_red, axis=1))
+        st.dataframe(display_df.style.apply(highlight_expiring, axis=1), use_container_width=True)
     else:
-        st.info("Nenhum membro cadastrado ainda.")
+        st.info("Nenhum membro ativo nos seus grupos.")
 
-elif aba == "Adicionar Membro":
-    st.title("➕ Novo Assinante")
+elif aba == "Adicionar Novo Membro":
+    st.title("➕ Cadastrar Novo Cliente")
     
-    with st.form("form_add"):
-        g_id = st.text_input("ID do Grupo (Ex: -100...)")
-        g_nome = st.text_input("Nome do Grupo")
-        u_id = st.text_input("ID do Usuário (ou use link de uso único)")
-        u_nome = st.text_input("Nome do Cliente")
-        tempo_opcoes = ["30 min", "1 hora", "15 dias", "30 dias", "1 ano", "Vitalício"]
-        tempo = st.selectbox("Duração da Assinatura", tempo_opcoes)
+    with st.expander("Como pegar as informações?", expanded=False):
+        st.write("1. Adicione o bot no seu grupo como Admin.")
+        st.write("2. Para o ID do Grupo: Use o bot @RawDataBot no grupo.")
+        st.write("3. Para o ID do Usuário: Use o bot @userinfobot com o cliente.")
+
+    with st.form("cadastro"):
+        col1, col2 = st.columns(2)
+        with col1:
+            g_id = st.text_input("ID do Grupo (ex: -100...)")
+            g_nome = st.text_input("Nome do Grupo (ex: VIP Estratégias)")
+        with col2:
+            u_id = st.text_input("ID do Usuário (ID numérico do Telegram)")
+            u_nome = st.text_input("Nome do Cliente")
         
-        enviar = st.form_submit_button("Confirmar Cadastro")
+        tempo = st.selectbox("Tempo de Permanência", 
+                            ["30 minutos", "1 hora", "1 semana", "15 dias", "30 dias", "60 dias", "90 dias", "1 ano", "2 anos", "Vitalício"])
         
-        if enviar:
+        btn = st.form_submit_button("ADICIONAR AO SISTEMA")
+        
+        if btn:
             agora = datetime.now()
-            # Lógica de cálculo de data
-            if tempo == "30 min": expira = agora + timedelta(minutes=30)
-            elif tempo == "1 hora": expira = agora + timedelta(hours=1)
-            elif tempo == "15 dias": expira = agora + timedelta(days=15)
-            elif tempo == "30 dias": expira = agora + timedelta(days=30)
-            elif tempo == "1 ano": expira = agora + timedelta(days=365)
-            else: expira = "Vitalício"
+            # Lógica de tempo
+            deltas = {
+                "30 minutos": timedelta(minutes=30), "1 hora": timedelta(hours=1),
+                "1 semana": timedelta(weeks=1), "15 dias": timedelta(days=15),
+                "30 dias": timedelta(days=30), "60 dias": timedelta(days=60),
+                "90 dias": timedelta(days=90), "1 ano": timedelta(days=365),
+                "2 anos": timedelta(days=730)
+            }
             
             data_entrada = agora.strftime("%d/%m/%Y %H:%M")
-            data_saida = expira.strftime("%d/%m/%Y %H:%M") if expira != "Vitalício" else "Vitalício"
+            data_saida = (agora + deltas[tempo]).strftime("%d/%m/%Y %H:%M") if tempo != "Vitalício" else "Vitalício"
             
             cursor = conn.cursor()
             cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, entrada, saida) VALUES (?,?,?,?,?,?)",
                            (g_id, g_nome, u_id, u_nome, data_entrada, data_saida))
             conn.commit()
-            st.success(f"Cliente {u_nome} adicionado com sucesso!")
-
-# --- LOOP DE REMOÇÃO AUTOMÁTICA (Roda por trás do site) ---
-# Aqui o bot checa o banco e expulsa quem expirou
+            st.success(f"✅ {u_nome} adicionado com sucesso ao grupo {g_nome}!")
