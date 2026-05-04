@@ -84,14 +84,6 @@ if not hasattr(st, "bot_rodando"):
     threading.Thread(target=monitor_geral, daemon=True).start()
     threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=['chat_member'], skip_pending=True), daemon=True).start()
     st.bot_rodando = True
-```[cite: 1]
-
-### O teste final
-Após salvar essas mudanças no GitHub e o Streamlit atualizar:
-1.  Dê mais um **Reboot** no painel do Streamlit.[cite: 1]
-2.  Abra o log. Se as mensagens de **"Error code: 409"** pararem de aparecer, o bot voltou a viver.[cite: 1]
-
-Enquanto aquele erro 409 estiver subindo na tela, ninguém vai conseguir entrar no seu grupo pelo link.[cite: 1] Você quer que eu te ajude a ajustar esse pedaço do código agora?
 
 # --- INTERFACE DO SEU SITE ---
 st.set_page_config(page_title="Vanthagem Assinaturas", layout="wide")
