@@ -1,3 +1,4 @@
+import os; os.system('python reparar_banco.py')
 import streamlit as st
 import telebot
 import sqlite3
