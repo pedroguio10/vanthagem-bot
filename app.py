@@ -81,6 +81,7 @@ def monitorar_entrada(message):
         conn_in.close()
 
 if not hasattr(st, "bot_rodando"):
+    bot.remove_webhook()  # ISSO AQUI vai derrubar qualquer outra instância travada
     threading.Thread(target=monitor_geral, daemon=True).start()
     threading.Thread(target=lambda: bot.infinity_polling(allowed_updates=['chat_member'], skip_pending=True), daemon=True).start()
     st.bot_rodando = True
