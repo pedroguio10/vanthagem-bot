@@ -144,11 +144,19 @@ if aba == "📊 Dashboard Geral":
         # Estilização: Linhas vermelhas para críticos
         def highlight_critico(row):
             return ['background-color: #ff4b4b; color: white' if row.critico and row.status == 'Ativo' else '' for _ in row]
-
-        # Exibição da Tabela
-        st.write(f"Exibindo {len(dff)} registros")
+            
+        # Nova forma de exibir a tabela sem erros
         colunas_show = ['grupo_nome', 'nome', 'status', 'entrada', 'saida']
-        st.dataframe(dff[colunas_show].style.apply(highlight_critico, axis=1), use_container_width=True)
+        
+        # Primeiro pintamos a tabela usando todos os dados (incluindo o critico)
+        styled_df = dff.style.apply(highlight_critico, axis=1)
+
+        # Depois mostramos na tela apenas o que interessa
+        st.dataframe(
+            styled_df, 
+            column_order=colunas_show, 
+            width='stretch'
+        )
 
         # --- AÇÕES RÁPIDAS (Visualizar Link) ---
         st.divider()
