@@ -32,7 +32,7 @@ def conectar():
                     acao TEXT, grupo_nome TEXT, 
                     data_hora TEXT, detalhes TEXT)''')
     
-    # Migrações
+    # Garantir colunas novas
     colunas = [("username", "TEXT"), ("telefone", "TEXT"), ("invite_link", "TEXT")]
     for col, tipo in colunas:
         try: cursor.execute(f"ALTER TABLE membros ADD COLUMN {col} {tipo}")
@@ -122,7 +122,6 @@ def sincronizar_dados():
                 chat = bot.get_chat(g[0])
                 cursor_sync.execute("UPDATE membros SET grupo_nome = ? WHERE grupo_id = ?", (chat.title, g[0]))
             except: pass
-        
         cursor_sync.execute("SELECT DISTINCT user_id FROM membros WHERE status != 'Expirado'")
         for u in cursor_sync.fetchall():
             try:
@@ -136,8 +135,8 @@ def sincronizar_dados():
     except: return False
 
 st.sidebar.title("💎 Vanthagem PRO")
-if st.sidebar.button("🔄 Sincronizar Tudo agora"):
-    if sincronizar_dados(): st.sidebar.success("Dados atualizados!")
+if st.sidebar.button("🔄 Sincronizar Tudo"):
+    if sincronizar_dados(): st.sidebar.success("Atualizado!")
 
 aba = st.sidebar.radio("Navegação", ["📊 Dashboard Geral", "➕ Novo Cliente", "⚙️ Gerenciar Tempo", "📜 Expirados", "👤 Perfil do Cliente"])
 
@@ -151,20 +150,32 @@ def verificar_urgencia(data_str):
 
 if aba == "📊 Dashboard Geral":
     st.title("📊 Gestão de Membros Ativos")
-    df = pd.read_sql_query("SELECT grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
+    df = pd.read_sql_query("SELECT id, grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
     
     if not df.empty:
         df['critico'] = df['saida'].apply(verificar_urgencia)
+        
         st.sidebar.subheader("Filtros")
-        f_grupo = st.sidebar.multiselect("Filtrar por Grupo", options=df['grupo_nome'].unique())
+        f_grupo = st.sidebar.selectbox("Filtrar por Grupo", options=["Todos"] + list(df['grupo_nome'].unique()))
+        apenas_criticos = st.sidebar.checkbox("Mostrar apenas Críticos (<24h)")
         
         dff = df.copy()
-        if f_grupo: dff = dff[dff['grupo_nome'].isin(f_grupo)]
+        if f_grupo != "Todos": dff = dff[dff['grupo_nome'] == f_grupo]
+        if apenas_criticos: dff = dff[dff['critico'] == True]
 
         def highlight_critico(row):
             return ['background-color: #ff4b4b; color: white' if row.critico and row.status == 'Ativo' else '' for _ in row]
 
         st.dataframe(dff.style.apply(highlight_critico, axis=1), column_order=['grupo_nome', 'nome', 'username', 'status', 'entrada', 'saida'], width='stretch')
+        
+        # RESTAURAÇÃO: Recuperação de Links Pendentes
+        st.subheader("🔗 Links Pendentes (Recuperação)")
+        pendentes = dff[dff['status'] == 'Pendente']
+        if not pendentes.empty:
+            for _, p in pendentes.iterrows():
+                st.info(f"Link para **{p['nome']}** no grupo **{p['grupo_nome']}**:")
+                st.code(p['invite_link'])
+        else: st.write("Nenhum link pendente no filtro atual.")
     else: st.info("Nenhum dado encontrado.")
 
 elif aba == "➕ Novo Cliente":
@@ -179,8 +190,7 @@ elif aba == "➕ Novo Cliente":
             g_id_in = st.text_input("ID do Grupo (-100...)")
             if st.button("🔍 Validar Grupo"):
                 try: 
-                    chat = bot.get_chat(g_id_in)
-                    st.session_state.g_valido = chat.title
+                    chat = bot.get_chat(g_id_in); st.session_state.g_valido = chat.title
                     st.success(f"Grupo: {chat.title}")
                 except: st.error("Grupo não encontrado.")
         with colB:
@@ -190,11 +200,11 @@ elif aba == "➕ Novo Cliente":
                     u = bot.get_chat(u_id_in)
                     st.session_state.u_valido = f"{u.first_name} {u.last_name or ''}".strip()
                     st.session_state.user_valido = f"@{u.username}" if u.username else "Sem Username"
-                    st.success(f"Usuário: {st.session_state.u_valido} | {st.session_state.user_valido}")
+                    st.success(f"Usuário: {st.session_state.u_valido}")
                 except: st.error("Usuário não encontrado.")
 
     with st.form("cadastro"):
-        st.subheader("Confirmar Dados")
+        st.subheader("Confirmar Cadastro")
         c1, c2 = st.columns(2)
         final_gnome = c1.text_input("Grupo Selecionado", value=st.session_state.g_valido, disabled=True)
         final_unome = c2.text_input("Nome do Cliente", value=st.session_state.u_valido)
@@ -211,81 +221,85 @@ elif aba == "➕ Novo Cliente":
                     cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, username, entrada, saida, duracao_txt, status, invite_link, telefone) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                                    (g_id_in, final_gnome, u_id_in, final_unome, final_user, "Aguardando", "Aguardando", tempo, "Pendente", link, final_tel))
                     cursor.execute("INSERT INTO historico (user_id, nome, acao, grupo_nome, data_hora, detalhes) VALUES (?,?,?,?,?,?)",
-                                   (u_id_in, final_unome, "Link Gerado", final_gnome, get_now_br().strftime("%d/%m/%Y %H:%M"), f"Username: {final_user}"))
+                                   (u_id_in, final_unome, "Link Gerado", final_gnome, get_now_br().strftime("%d/%m/%Y %H:%M"), f"Plano: {tempo}"))
                     conn.commit()
                     st.success("✅ Link Gerado!"); st.code(link)
-                except: st.error("Erro ao criar link. Verifique as permissões do bot.")
+                except: st.error("Erro ao criar link. Verifique o Bot no grupo.")
 
 elif aba == "⚙️ Gerenciar Tempo":
-    st.title("⚙️ Renovação de Tempo")
+    st.title("⚙️ Gerenciamento e Renovação")
     df_g = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros WHERE status != 'Pendente'", conn)
-    if not df_g.empty:
-        filtro_g = st.selectbox("1. Filtrar Grupo:", df_g['grupo_nome'])
-        df_m = pd.read_sql_query("SELECT id, user_id, nome, saida FROM membros WHERE grupo_nome = ? AND status != 'Pendente'", conn, params=(filtro_g,))
+    
+    # FILTRO FLEXÍVEL: "Todos" ou Grupo Específico
+    f_g_tempo = st.selectbox("1. Filtrar por Grupo:", ["Todos"] + list(df_g['grupo_nome'].unique()))
+    
+    query_tempo = "SELECT id, user_id, nome, saida, grupo_nome FROM membros WHERE status != 'Pendente'"
+    params = []
+    if f_g_tempo != "Todos":
+        query_tempo += " AND grupo_nome = ?"
+        params.append(f_g_tempo)
+    
+    df_m = pd.read_sql_query(query_tempo, conn, params=params)
+    
+    if not df_m.empty:
+        escolha = st.selectbox("2. Escolha o Cliente:", [f"{r['nome']} ({r['grupo_nome']})" for _, r in df_m.iterrows()])
+        cliente_idx = [f"{r['nome']} ({r['grupo_nome']})" for _, r in df_m.iterrows()].index(escolha)
+        m_data = df_m.iloc[cliente_idx]
         
-        if not df_m.empty:
-            escolha = st.selectbox("2. Escolha o Cliente:", df_m['nome'])
-            m_data = df_m[df_m['nome'] == escolha].iloc[0]
-            st.info(f"Expiração Atual: {m_data['saida']}")
+        st.info(f"Expiração Atual: {m_data['saida']}")
+        add_t = st.radio("Adicionar Tempo:", ["30 min", "1 hora", "1 dia", "15 dias", "30 dias", "60 dias"])
+        
+        if st.button("CONFIRMAR RENOVAÇÃO"):
+            base = get_now_br() if m_data['saida'] in ["Expirado", "Aguardando"] else datetime.strptime(m_data['saida'], "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
+            deltas = {"30 min": timedelta(minutes=30), "1 hora": timedelta(hours=1), "1 dia": timedelta(days=1), "15 dias": timedelta(days=15), "30 dias": timedelta(days=30), "60 dias": timedelta(days=60)}
+            nova_data = (base + deltas[add_t]).strftime("%d/%m/%Y %H:%M")
             
-            add_t = st.radio("Adicionar:", ["30 min", "1 hora", "1 dia", "15 dias", "30 dias", "60 dias"])
-            if st.button("CONFIRMAR RENOVAÇÃO"):
-                base = get_now_br() if m_data['saida'] in ["Expirado", "Aguardando"] else datetime.strptime(m_data['saida'], "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
-                deltas = {"30 min": timedelta(minutes=30), "1 hora": timedelta(hours=1), "1 dia": timedelta(days=1), "15 dias": timedelta(days=15), "30 dias": timedelta(days=30), "60 dias": timedelta(days=60)}
-                nova_data = (base + deltas[add_t]).strftime("%d/%m/%Y %H:%M")
-                
-                cursor = conn.cursor()
-                cursor.execute("UPDATE membros SET saida = ?, status = 'Ativo' WHERE id = ?", (nova_data, int(m_data['id'])))
-                cursor.execute("INSERT INTO historico (user_id, nome, acao, grupo_nome, data_hora, detalhes) VALUES (?,?,?,?,?,?)",
-                               (m_data['user_id'], escolha, "Renovação", filtro_g, get_now_br().strftime("%d/%m/%Y %H:%M"), f"Novo prazo: {nova_data}"))
-                conn.commit()
-                st.success(f"✅ Tempo atualizado!"); st.balloons()
-    else: st.info("Nenhum cliente disponível.")
+            cursor = conn.cursor()
+            cursor.execute("UPDATE membros SET saida = ?, status = 'Ativo' WHERE id = ?", (nova_data, int(m_data['id'])))
+            cursor.execute("INSERT INTO historico (user_id, nome, acao, grupo_nome, data_hora, detalhes) VALUES (?,?,?,?,?,?)",
+                           (m_data['user_id'], m_data['nome'], "Renovação", m_data['grupo_nome'], get_now_br().strftime("%d/%m/%Y %H:%M"), f"Até {nova_data}"))
+            conn.commit()
+            st.success(f"✅ Atualizado!"); st.balloons()
+    else: st.info("Nenhum cliente disponível para gerenciar.")
 
 elif aba == "📜 Expirados":
-    st.title("📜 Histórico de Clientes Expirados")
+    st.title("📜 Histórico de Expirados")
     df_grupos_exp = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros WHERE status = 'Expirado'", conn)
+    f_g_exp = st.selectbox("Filtrar Grupo:", ["Todos"] + list(df_grupos_exp['grupo_nome'].unique()))
     
-    if not df_grupos_exp.empty:
-        f_g_exp = st.selectbox("Filtrar por Grupo:", ["Todos"] + list(df_grupos_exp['grupo_nome']))
-        
-        query_exp = "SELECT grupo_nome, nome, username, entrada, saida FROM membros WHERE status = 'Expirado'"
-        if f_g_exp != "Todos":
-            query_exp += f" AND grupo_nome = '{f_g_exp}'"
-        query_exp += " ORDER BY id DESC"
-        
-        df_exp = pd.read_sql_query(query_exp, conn)
-        st.dataframe(df_exp, width='stretch')
-    else:
-        st.info("Nenhum cliente expirado para exibir.")
+    query_exp = "SELECT grupo_nome, nome, username, entrada, saida FROM membros WHERE status = 'Expirado'"
+    if f_g_exp != "Todos": query_exp += f" AND grupo_nome = '{f_g_exp}'"
+    
+    df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn)
+    st.dataframe(df_exp, width='stretch') if not df_exp.empty else st.info("Vazio.")
 
 elif aba == "👤 Perfil do Cliente":
     st.title("👤 Dossiê do Cliente")
     df_g = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros", conn)
-    if not df_g.empty:
-        f_g = st.selectbox("Filtrar Grupo:", ["Todos"] + list(df_g['grupo_nome']))
-        query = "SELECT DISTINCT user_id, nome FROM membros"
-        if f_g != "Todos": query += f" WHERE grupo_nome = '{f_g}'"
+    f_g_p = st.selectbox("Filtrar por Grupo:", ["Todos"] + list(df_g['grupo_nome'].unique()))
+    
+    query_p = "SELECT DISTINCT user_id, nome FROM membros"
+    if f_g_p != "Todos": query_p += f" WHERE grupo_nome = '{f_g_p}'"
+    
+    df_u = pd.read_sql_query(query_p, conn)
+    if not df_u.empty:
+        cliente = st.selectbox("Escolha o Cliente:", df_u['nome'])
+        uid = df_u[df_u['nome'] == cliente]['user_id'].values[0]
+        dados = pd.read_sql_query("SELECT * FROM membros WHERE user_id = ?", conn, params=(uid,))
         
-        df_u = pd.read_sql_query(query, conn)
-        if not df_u.empty:
-            cliente = st.selectbox("Escolha o Cliente:", df_u['nome'])
-            uid = df_u[df_u['nome'] == cliente]['user_id'].values[0]
+        with st.container(border=True):
+            st.subheader(f"Ficha: {cliente}")
+            c1, c2 = st.columns(2)
+            c1.write(f"**Username:** {dados['username'].iloc[0]}")
+            c1.write(f"**ID:** {uid}")
+            c2.write(f"**Telefone:** {dados['telefone'].iloc[0] or 'Não informado'}")
             
-            dados = pd.read_sql_query("SELECT * FROM membros WHERE user_id = ?", conn, params=(uid,))
-            with st.container(border=True):
-                st.subheader(f"Ficha de {cliente}")
-                c1, c2 = st.columns(2)
-                c1.write(f"**Username:** {dados['username'].iloc[0]}")
-                c1.write(f"**Telegram ID:** {uid}")
-                c2.write(f"**Telefone:** {dados['telefone'].iloc[0] or 'Não cadastrado'}")
-                
-                st.write("**Acessos do Cliente:**")
-                for _, r in dados.iterrows():
-                    cor = "🟢" if r['status'] == 'Ativo' else ("🟡" if r['status'] == 'Pendente' else "🔴")
-                    st.write(f"{cor} {r['grupo_nome']} | Status: {r['status']} | Expira: {r['saida']}")
+            st.write("**Acessos Atuais:**")
+            for _, r in dados.iterrows():
+                cor = "🟢" if r['status'] == 'Ativo' else ("🟡" if r['status'] == 'Pendente' else "🔴")
+                st.write(f"{cor} {r['grupo_nome']} | Expira em: {r['saida']}")
 
-            st.subheader("📑 Histórico de Ações")
-            hist = pd.read_sql_query("SELECT data_hora, acao, grupo_nome, detalhes FROM historico WHERE user_id = ? ORDER BY id DESC", conn, params=(uid,))
-            st.dataframe(hist, width='stretch')
+        st.subheader("📑 Linha do Tempo")
+        hist = pd.read_sql_query("SELECT data_hora, acao, grupo_nome, detalhes FROM historico WHERE user_id = ? ORDER BY id DESC", conn, params=(uid,))
+        st.dataframe(hist, width='stretch')
     else: st.info("Nenhum cliente cadastrado.")
