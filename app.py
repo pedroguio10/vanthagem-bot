@@ -14,6 +14,19 @@ bot = telebot.TeleBot(TOKEN)
 def get_now_br():
     return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-3)))
 
+# --- FUNÇÃO DE FORMATAÇÃO DE DATA (PARA A DASHBOARD) ---
+def formatar_data_br(valor):
+    if not valor or valor in ["Vitalício", "Aguardando", "Aguardando Entrada", "Não Iniciado"]:
+        return valor
+    try:
+        # Se for uma data ISO do banco antigo, converte para BR
+        if "-" in valor and ":" in valor:
+            dt = pd.to_datetime(valor)
+            return dt.strftime("%d/%m/%Y %H:%M")
+        return valor
+    except:
+        return valor
+
 def conectar():
     conn = sqlite3.connect('vanthagem_v2.db', check_same_thread=False)
     cursor = conn.cursor()
@@ -32,7 +45,6 @@ def conectar():
                     acao TEXT, grupo_nome TEXT, 
                     data_hora TEXT, detalhes TEXT)''')
     
-    # Garantir colunas novas
     colunas = [("username", "TEXT"), ("telefone", "TEXT"), ("invite_link", "TEXT")]
     for col, tipo in colunas:
         try: cursor.execute(f"ALTER TABLE membros ADD COLUMN {col} {tipo}")
@@ -153,6 +165,9 @@ if aba == "📊 Dashboard Geral":
     df = pd.read_sql_query("SELECT id, grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
     
     if not df.empty:
+        # CORREÇÃO 1: Formatação Brasileira na Dashboard
+        df['entrada'] = df['entrada'].apply(formatar_data_br)
+        df['saida'] = df['saida'].apply(formatar_data_br)
         df['critico'] = df['saida'].apply(verificar_urgencia)
         
         st.sidebar.subheader("Filtros")
@@ -168,7 +183,6 @@ if aba == "📊 Dashboard Geral":
 
         st.dataframe(dff.style.apply(highlight_critico, axis=1), column_order=['grupo_nome', 'nome', 'username', 'status', 'entrada', 'saida'], width='stretch')
         
-        # RESTAURAÇÃO: Recuperação de Links Pendentes
         st.subheader("🔗 Links Pendentes (Recuperação)")
         pendentes = dff[dff['status'] == 'Pendente']
         if not pendentes.empty:
@@ -229,8 +243,6 @@ elif aba == "➕ Novo Cliente":
 elif aba == "⚙️ Gerenciar Tempo":
     st.title("⚙️ Gerenciamento e Renovação")
     df_g = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros WHERE status != 'Pendente'", conn)
-    
-    # FILTRO FLEXÍVEL: "Todos" ou Grupo Específico
     f_g_tempo = st.selectbox("1. Filtrar por Grupo:", ["Todos"] + list(df_g['grupo_nome'].unique()))
     
     query_tempo = "SELECT id, user_id, nome, saida, grupo_nome FROM membros WHERE status != 'Pendente'"
@@ -271,7 +283,13 @@ elif aba == "📜 Expirados":
     if f_g_exp != "Todos": query_exp += f" AND grupo_nome = '{f_g_exp}'"
     
     df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn)
-    st.dataframe(df_exp, width='stretch') if not df_exp.empty else st.info("Vazio.")
+    
+    if not df_exp.empty:
+        # CORREÇÃO 2: Limpeza de textos "bizarrros" na aba Expirados
+        df_exp.replace("Aguardando Entrada", "Não Iniciado", inplace=True)
+        df_exp.replace("Aguardando", "Não Iniciado", inplace=True)
+        st.dataframe(df_exp, width='stretch')
+    else: st.info("Vazio.")
 
 elif aba == "👤 Perfil do Cliente":
     st.title("👤 Dossiê do Cliente")
@@ -297,7 +315,7 @@ elif aba == "👤 Perfil do Cliente":
             st.write("**Acessos Atuais:**")
             for _, r in dados.iterrows():
                 cor = "🟢" if r['status'] == 'Ativo' else ("🟡" if r['status'] == 'Pendente' else "🔴")
-                st.write(f"{cor} {r['grupo_nome']} | Expira em: {r['saida']}")
+                st.write(f"{cor} {r['grupo_nome']} | Expira em: {formatar_data_br(r['saida'])}")
 
         st.subheader("📑 Linha do Tempo")
         hist = pd.read_sql_query("SELECT data_hora, acao, grupo_nome, detalhes FROM historico WHERE user_id = ? ORDER BY id DESC", conn, params=(uid,))
