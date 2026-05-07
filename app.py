@@ -19,6 +19,7 @@ def formatar_data_br(valor):
     if not valor or valor in ["Vitalício", "Aguardando", "Aguardando Entrada", "Não Iniciado"]:
         return valor
     try:
+        # Se for uma data ISO do banco antigo, converte para BR
         if "-" in valor and ":" in valor:
             dt = pd.to_datetime(valor)
             return dt.strftime("%d/%m/%Y %H:%M")
@@ -152,7 +153,7 @@ if st.sidebar.button("🔄 Sincronizar Tudo"):
 aba = st.sidebar.radio("Navegação", ["📊 Dashboard Geral", "➕ Novo Cliente", "⚙️ Gerenciar Tempo", "📜 Expirados", "👤 Perfil do Cliente"])
 
 def verificar_urgencia(data_str):
-    if data_str in ["Vitalício", "Aguardando Entrada", "Aguardando", "Não Iniciado"]: return False
+    if data_str in ["Vitalício", "Aguardando Entrada", "Aguardando"]: return False
     try:
         data_fim = datetime.strptime(data_str, "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
         diff = data_fim - get_now_br()
@@ -164,6 +165,7 @@ if aba == "📊 Dashboard Geral":
     df = pd.read_sql_query("SELECT id, grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
     
     if not df.empty:
+        # CORREÇÃO 1: Formatação Brasileira na Dashboard
         df['entrada'] = df['entrada'].apply(formatar_data_br)
         df['saida'] = df['saida'].apply(formatar_data_br)
         df['critico'] = df['saida'].apply(verificar_urgencia)
@@ -181,19 +183,13 @@ if aba == "📊 Dashboard Geral":
 
         st.dataframe(dff.style.apply(highlight_critico, axis=1), column_order=['grupo_nome', 'nome', 'username', 'status', 'entrada', 'saida'], width='stretch')
         
-        # --- BLOCO ATUALIZADO: Recuperação de Links com Seletor ---
-        st.subheader("🔗 Recuperação de Links de Convite")
+        st.subheader("🔗 Links Pendentes (Recuperação)")
         pendentes = dff[dff['status'] == 'Pendente']
         if not pendentes.empty:
-            lista_pendentes = [f"{p['nome']} ({p['grupo_nome']})" for _, p in pendentes.iterrows()]
-            selecionado = st.selectbox("Selecione o usuário para recuperar o link:", lista_pendentes)
-            index_sel = lista_pendentes.index(selecionado)
-            p_sel = pendentes.iloc[index_sel]
-            
-            st.info(f"Link para **{p_sel['nome']}** no grupo **{p_sel['grupo_nome']}**:")
-            st.code(p_sel['invite_link'])
-        else: 
-            st.write("Nenhum usuário pendente no filtro atual.")
+            for _, p in pendentes.iterrows():
+                st.info(f"Link para **{p['nome']}** no grupo **{p['grupo_nome']}**:")
+                st.code(p['invite_link'])
+        else: st.write("Nenhum link pendente no filtro atual.")
     else: st.info("Nenhum dado encontrado.")
 
 elif aba == "➕ Novo Cliente":
@@ -242,7 +238,7 @@ elif aba == "➕ Novo Cliente":
                                    (u_id_in, final_unome, "Link Gerado", final_gnome, get_now_br().strftime("%d/%m/%Y %H:%M"), f"Plano: {tempo}"))
                     conn.commit()
                     st.success("✅ Link Gerado!"); st.code(link)
-                except: st.error("Erro ao criar link.")
+                except: st.error("Erro ao criar link. Verifique o Bot no grupo.")
 
 elif aba == "⚙️ Gerenciar Tempo":
     st.title("⚙️ Gerenciamento e Renovação")
@@ -266,7 +262,7 @@ elif aba == "⚙️ Gerenciar Tempo":
         add_t = st.radio("Adicionar Tempo:", ["30 min", "1 hora", "1 dia", "15 dias", "30 dias", "60 dias"])
         
         if st.button("CONFIRMAR RENOVAÇÃO"):
-            base = get_now_br() if m_data['saida'] in ["Expirado", "Aguardando", "Não Iniciado"] else datetime.strptime(m_data['saida'], "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
+            base = get_now_br() if m_data['saida'] in ["Expirado", "Aguardando"] else datetime.strptime(m_data['saida'], "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
             deltas = {"30 min": timedelta(minutes=30), "1 hora": timedelta(hours=1), "1 dia": timedelta(days=1), "15 dias": timedelta(days=15), "30 dias": timedelta(days=30), "60 dias": timedelta(days=60)}
             nova_data = (base + deltas[add_t]).strftime("%d/%m/%Y %H:%M")
             
@@ -276,7 +272,7 @@ elif aba == "⚙️ Gerenciar Tempo":
                            (m_data['user_id'], m_data['nome'], "Renovação", m_data['grupo_nome'], get_now_br().strftime("%d/%m/%Y %H:%M"), f"Até {nova_data}"))
             conn.commit()
             st.success(f"✅ Atualizado!"); st.balloons()
-    else: st.info("Vazio.")
+    else: st.info("Nenhum cliente disponível para gerenciar.")
 
 elif aba == "📜 Expirados":
     st.title("📜 Histórico de Expirados")
@@ -287,7 +283,9 @@ elif aba == "📜 Expirados":
     if f_g_exp != "Todos": query_exp += f" AND grupo_nome = '{f_g_exp}'"
     
     df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn)
+    
     if not df_exp.empty:
+        # CORREÇÃO 2: Limpeza de textos "bizarrros" na aba Expirados
         df_exp.replace("Aguardando Entrada", "Não Iniciado", inplace=True)
         df_exp.replace("Aguardando", "Não Iniciado", inplace=True)
         st.dataframe(df_exp, width='stretch')
@@ -322,4 +320,4 @@ elif aba == "👤 Perfil do Cliente":
         st.subheader("📑 Linha do Tempo")
         hist = pd.read_sql_query("SELECT data_hora, acao, grupo_nome, detalhes FROM historico WHERE user_id = ? ORDER BY id DESC", conn, params=(uid,))
         st.dataframe(hist, width='stretch')
-    else: st.info("Vazio.")
+    else: st.info("Nenhum cliente cadastrado.")
