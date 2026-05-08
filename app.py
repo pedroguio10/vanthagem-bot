@@ -12,6 +12,7 @@ bot = telebot.TeleBot(TOKEN)
 
 # --- FUNÇÃO DE HORÁRIO BRASÍLIA ---
 def get_now_br():
+    # Garante o fuso horário de Brasília/Rio/SP (UTC-3)
     return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-3)))
 
 # --- FUNÇÃO DE FORMATAÇÃO DE DATA ---
@@ -19,6 +20,7 @@ def formatar_data_br(valor):
     if not valor or valor in ["Vitalício", "Aguardando", "Aguardando Entrada", "Não Iniciado"]:
         return valor
     try:
+        # Tenta converter formatos antigos (ISO) para o padrão BR caso existam no banco
         if "-" in valor and ":" in valor:
             dt = pd.to_datetime(valor)
             return dt.strftime("%d/%m/%Y %H:%M")
@@ -44,6 +46,7 @@ def conectar():
                     acao TEXT, grupo_nome TEXT, 
                     data_hora TEXT, detalhes TEXT)''')
     
+    # Garantir colunas essenciais
     colunas = [("username", "TEXT"), ("telefone", "TEXT"), ("invite_link", "TEXT")]
     for col, tipo in colunas:
         try: cursor.execute(f"ALTER TABLE membros ADD COLUMN {col} {tipo}")
@@ -54,7 +57,7 @@ def conectar():
 
 conn = conectar()
 
-# --- MOTOR DE MONITORAMENTO ---
+# --- MOTOR DE MONITORAMENTO (FUSO BRASÍLIA) ---
 def monitor_geral():
     while True:
         try:
@@ -69,11 +72,13 @@ def monitor_geral():
                 if data_saida == "Vitalício": continue
                 
                 try:
+                    # Parse da data garantindo o fuso de Brasília para comparação
                     limite = datetime.strptime(data_saida, "%d/%m/%Y %H:%M").replace(tzinfo=timezone(timedelta(hours=-3)))
                     if agora >= limite:
                         try:
-                            bot.ban_chat_member(g_id, u_id)
-                            bot.unban_chat_member(g_id, u_id)
+                            # Converte IDs para int para garantir a execução do banimento
+                            bot.ban_chat_member(int(g_id), int(u_id))
+                            bot.unban_chat_member(int(g_id), int(u_id))
                         except: pass
                         
                         cursor.execute("UPDATE membros SET status = 'Expirado' WHERE id = ?", (m_id,))
@@ -181,18 +186,22 @@ if aba == "📊 Dashboard Geral":
 
         st.dataframe(dff.style.apply(highlight_critico, axis=1), column_order=['grupo_nome', 'nome', 'username', 'status', 'entrada', 'saida'], width='stretch')
         
+        # --- RECURSO: RECUPERAÇÃO DE LINKS COM SELETOR ---
         st.subheader("🔗 Recuperação de Links de Convite")
         pendentes = dff[dff['status'] == 'Pendente']
         if not pendentes.empty:
             lista_pendentes = [f"{p['nome']} ({p['grupo_nome']})" for _, p in pendentes.iterrows()]
             selecionado = st.selectbox("Selecione o membro pendente para recuperar o link:", lista_pendentes)
+            
+            # Localiza o link do membro selecionado
             index_sel = lista_pendentes.index(selecionado)
             p_sel = pendentes.iloc[index_sel]
+            
             st.info(f"Link para **{p_sel['nome']}** no grupo **{p_sel['grupo_nome']}**:")
             st.code(p_sel['invite_link'])
         else:
             st.write("Nenhum usuário aguardando entrada no momento.")
-    else: st.info("Vazio.")
+    else: st.info("Nenhum membro ativo ou pendente encontrado.")
 
 elif aba == "➕ Novo Cliente":
     st.title("➕ Gerar Acesso Inteligente")
@@ -206,21 +215,20 @@ elif aba == "➕ Novo Cliente":
             g_id_in = st.text_input("ID do Grupo (-100...)")
             if st.button("🔍 Validar Grupo"):
                 try: 
-                    # FIX: Converte ID para inteiro e remove espaços
-                    chat = bot.get_chat(int(g_id_in.strip()))
-                    st.session_state.g_valido = chat.title
+                    # CONVERSÃO PARA INT ADICIONADA AQUI
+                    chat = bot.get_chat(int(g_id_in.strip())); st.session_state.g_valido = chat.title
                     st.success(f"Grupo: {chat.title}")
-                except Exception as e: st.error(f"Erro: ID de grupo inválido.")
+                except: st.error("Grupo não encontrado.")
         with colB:
             u_id_in = st.text_input("ID do Usuário")
             if st.button("👤 Validar Usuário"):
                 try:
-                    # FIX: Converte ID para inteiro e remove espaços
+                    # CONVERSÃO PARA INT ADICIONADA AQUI
                     u = bot.get_chat(int(u_id_in.strip()))
                     st.session_state.u_valido = f"{u.first_name} {u.last_name or ''}".strip()
                     st.session_state.user_valido = f"@{u.username}" if u.username else "Sem Username"
                     st.success(f"Usuário: {st.session_state.u_valido}")
-                except Exception as e: st.error(f"Erro: ID de usuário inválido.")
+                except: st.error("Usuário não encontrado.")
 
     with st.form("cadastro"):
         st.subheader("Confirmar Cadastro")
@@ -235,6 +243,7 @@ elif aba == "➕ Novo Cliente":
             if not final_gnome or not final_unome: st.error("Valide os IDs primeiro!")
             else:
                 try:
+                    # CONVERSÃO PARA INT ADICIONADA AQUI NO LINK
                     link = bot.create_chat_invite_link(int(g_id_in.strip()), member_limit=1).invite_link
                     cursor = conn.cursor()
                     cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, username, entrada, saida, duracao_txt, status, invite_link, telefone) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -243,7 +252,7 @@ elif aba == "➕ Novo Cliente":
                                    (u_id_in.strip(), final_unome, "Link Gerado", final_gnome, get_now_br().strftime("%d/%m/%Y %H:%M"), f"Plano: {tempo}"))
                     conn.commit()
                     st.success("✅ Link Gerado!"); st.code(link)
-                except: st.error("Erro ao criar link.")
+                except: st.error("Erro ao criar link. Verifique as permissões do Bot.")
 
 elif aba == "⚙️ Gerenciar Tempo":
     st.title("⚙️ Gerenciamento e Renovação")
@@ -276,8 +285,8 @@ elif aba == "⚙️ Gerenciar Tempo":
             cursor.execute("INSERT INTO historico (user_id, nome, acao, grupo_nome, data_hora, detalhes) VALUES (?,?,?,?,?,?)",
                            (m_data['user_id'], m_data['nome'], "Renovação", m_data['grupo_nome'], get_now_br().strftime("%d/%m/%Y %H:%M"), f"Até {nova_data}"))
             conn.commit()
-            st.success(f"✅ Atualizado!"); st.balloons()
-    else: st.info("Não há membros ativos para gerenciar.")
+            st.success(f"✅ Tempo adicionado com sucesso!"); st.balloons()
+    else: st.info("Não há membros ativos para gerenciar neste filtro.")
 
 elif aba == "📜 Expirados":
     st.title("📜 Histórico de Expirados")
@@ -288,11 +297,12 @@ elif aba == "📜 Expirados":
     if f_g_exp != "Todos": query_exp += f" AND grupo_nome = '{f_g_exp}'"
     
     df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn)
+    
     if not df_exp.empty:
         df_exp.replace("Aguardando Entrada", "Não Iniciado", inplace=True)
         df_exp.replace("Aguardando", "Não Iniciado", inplace=True)
         st.dataframe(df_exp, width='stretch')
-    else: st.info("Vazio.")
+    else: st.info("Nenhum histórico de membros expirados.")
 
 elif aba == "👤 Perfil do Cliente":
     st.title("👤 Dossiê do Cliente")
@@ -323,4 +333,4 @@ elif aba == "👤 Perfil do Cliente":
         st.subheader("📑 Linha do Tempo")
         hist = pd.read_sql_query("SELECT data_hora, acao, grupo_nome, detalhes FROM historico WHERE user_id = ? ORDER BY id DESC", conn, params=(uid,))
         st.dataframe(hist, width='stretch')
-    else: st.info("Vazio.")
+    else: st.info("Nenhum cliente cadastrado.")
