@@ -166,7 +166,8 @@ def verificar_urgencia(data_str):
 
 if aba == "📊 Dashboard Geral":
     st.title("📊 Gestão de Membros Ativos")
-    df = pd.read_sql_query("SELECT id, grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
+    # Adicionado grupo_id para os filtros baseados em ID
+    df = pd.read_sql_query("SELECT id, grupo_id, grupo_nome, nome, username, status, entrada, saida, invite_link FROM membros WHERE status IN ('Ativo', 'Pendente')", conn)
     
     if not df.empty:
         df['entrada'] = df['entrada'].apply(formatar_data_br)
@@ -174,11 +175,15 @@ if aba == "📊 Dashboard Geral":
         df['critico'] = df['saida'].apply(verificar_urgencia)
         
         st.sidebar.subheader("Filtros")
-        f_grupo = st.sidebar.selectbox("Filtrar por Grupo", options=["Todos"] + list(df['grupo_nome'].unique()))
+        
+        # Filtro Inteligente: Seleciona pelo ID do Grupo, mas exibe o Nome
+        df_grupos = df[['grupo_id', 'grupo_nome']].drop_duplicates()
+        dict_grupos = dict(zip(df_grupos['grupo_id'], df_grupos['grupo_nome']))
+        f_grupo = st.sidebar.selectbox("Filtrar por Grupo", options=["Todos"] + list(dict_grupos.keys()), format_func=lambda x: "Todos" if x == "Todos" else dict_grupos[x])
         apenas_criticos = st.sidebar.checkbox("Mostrar apenas Críticos (<24h)")
         
         dff = df.copy()
-        if f_grupo != "Todos": dff = dff[dff['grupo_nome'] == f_grupo]
+        if f_grupo != "Todos": dff = dff[dff['grupo_id'] == f_grupo]
         if apenas_criticos: dff = dff[dff['critico'] == True]
 
         def highlight_critico(row):
@@ -186,17 +191,14 @@ if aba == "📊 Dashboard Geral":
 
         st.dataframe(dff.style.apply(highlight_critico, axis=1), column_order=['grupo_nome', 'nome', 'username', 'status', 'entrada', 'saida'], width='stretch')
         
-        # --- RECURSO: RECUPERAÇÃO DE LINKS COM SELETOR ---
+        # --- RECURSO: RECUPERAÇÃO DE LINKS COM SELETOR BASEADO EM ID ---
         st.subheader("🔗 Recuperação de Links de Convite")
         pendentes = dff[dff['status'] == 'Pendente']
         if not pendentes.empty:
-            lista_pendentes = [f"{p['nome']} ({p['grupo_nome']})" for _, p in pendentes.iterrows()]
-            selecionado = st.selectbox("Selecione o membro pendente para recuperar o link:", lista_pendentes)
+            dict_pendentes = {p['id']: f"{p['nome']} ({p['grupo_nome']})" for _, p in pendentes.iterrows()}
+            sel_id = st.selectbox("Selecione o membro pendente para recuperar o link:", list(dict_pendentes.keys()), format_func=lambda x: dict_pendentes[x])
             
-            # Localiza o link do membro selecionado
-            index_sel = lista_pendentes.index(selecionado)
-            p_sel = pendentes.iloc[index_sel]
-            
+            p_sel = pendentes[pendentes['id'] == sel_id].iloc[0]
             st.info(f"Link para **{p_sel['nome']}** no grupo **{p_sel['grupo_nome']}**:")
             st.code(p_sel['invite_link'])
         else:
@@ -215,7 +217,6 @@ elif aba == "➕ Novo Cliente":
             g_id_in = st.text_input("ID do Grupo (-100...)")
             if st.button("🔍 Validar Grupo"):
                 try: 
-                    # CONVERSÃO PARA INT ADICIONADA AQUI
                     chat = bot.get_chat(int(g_id_in.strip())); st.session_state.g_valido = chat.title
                     st.success(f"Grupo: {chat.title}")
                 except: st.error("Grupo não encontrado.")
@@ -223,7 +224,6 @@ elif aba == "➕ Novo Cliente":
             u_id_in = st.text_input("ID do Usuário")
             if st.button("👤 Validar Usuário"):
                 try:
-                    # CONVERSÃO PARA INT ADICIONADA AQUI
                     u = bot.get_chat(int(u_id_in.strip()))
                     st.session_state.u_valido = f"{u.first_name} {u.last_name or ''}".strip()
                     st.session_state.user_valido = f"@{u.username}" if u.username else "Sem Username"
@@ -243,7 +243,6 @@ elif aba == "➕ Novo Cliente":
             if not final_gnome or not final_unome: st.error("Valide os IDs primeiro!")
             else:
                 try:
-                    # CONVERSÃO PARA INT ADICIONADA AQUI NO LINK
                     link = bot.create_chat_invite_link(int(g_id_in.strip()), member_limit=1).invite_link
                     cursor = conn.cursor()
                     cursor.execute("INSERT INTO membros (grupo_id, grupo_nome, user_id, nome, username, entrada, saida, duracao_txt, status, invite_link, telefone) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -256,21 +255,26 @@ elif aba == "➕ Novo Cliente":
 
 elif aba == "⚙️ Gerenciar Tempo":
     st.title("⚙️ Gerenciamento e Renovação")
-    df_g = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros WHERE status = 'Ativo'", conn)
-    f_g_tempo = st.selectbox("1. Filtrar por Grupo:", ["Todos"] + list(df_g['grupo_nome'].unique()))
+    
+    # Filtro de Grupo baseado no grupo_id
+    df_g = pd.read_sql_query("SELECT DISTINCT grupo_id, grupo_nome FROM membros WHERE status = 'Ativo'", conn)
+    dict_g = dict(zip(df_g['grupo_id'], df_g['grupo_nome']))
+    f_g_tempo = st.selectbox("1. Filtrar por Grupo:", ["Todos"] + list(dict_g.keys()), format_func=lambda x: "Todos" if x == "Todos" else dict_g[x])
     
     query_tempo = "SELECT id, user_id, nome, saida, grupo_nome FROM membros WHERE status = 'Ativo'"
     params = []
     if f_g_tempo != "Todos":
-        query_tempo += " AND grupo_nome = ?"
+        query_tempo += " AND grupo_id = ?"
         params.append(f_g_tempo)
     
     df_m = pd.read_sql_query(query_tempo, conn, params=params)
     
     if not df_m.empty:
-        escolha = st.selectbox("2. Escolha o Cliente Ativo:", [f"{r['nome']} ({r['grupo_nome']})" for _, r in df_m.iterrows()])
-        cliente_idx = [f"{r['nome']} ({r['grupo_nome']})" for _, r in df_m.iterrows()].index(escolha)
-        m_data = df_m.iloc[cliente_idx]
+        # SELEÇÃO BLINDADA: Usa o ID do banco de dados pra evitar conflitos de nomes repetidos
+        dict_membros = {r['id']: f"{r['nome']} ({r['grupo_nome']})" for _, r in df_m.iterrows()}
+        escolha_id = st.selectbox("2. Escolha o Cliente Ativo:", list(dict_membros.keys()), format_func=lambda x: dict_membros[x])
+        
+        m_data = df_m[df_m['id'] == escolha_id].iloc[0]
         
         st.info(f"Expiração Atual: {m_data['saida']}")
         add_t = st.radio("Adicionar Tempo:", ["30 min", "1 hora", "1 dia", "15 dias", "30 dias", "60 dias"])
@@ -290,13 +294,18 @@ elif aba == "⚙️ Gerenciar Tempo":
 
 elif aba == "📜 Expirados":
     st.title("📜 Histórico de Expirados")
-    df_grupos_exp = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros WHERE status = 'Expirado'", conn)
-    f_g_exp = st.selectbox("Filtrar Grupo:", ["Todos"] + list(df_grupos_exp['grupo_nome'].unique()))
+    # Filtro seguro por grupo_id
+    df_grupos_exp = pd.read_sql_query("SELECT DISTINCT grupo_id, grupo_nome FROM membros WHERE status = 'Expirado'", conn)
+    dict_g_exp = dict(zip(df_grupos_exp['grupo_id'], df_grupos_exp['grupo_nome']))
+    f_g_exp = st.selectbox("Filtrar Grupo:", ["Todos"] + list(dict_g_exp.keys()), format_func=lambda x: "Todos" if x == "Todos" else dict_g_exp[x])
     
     query_exp = "SELECT grupo_nome, nome, username, entrada, saida FROM membros WHERE status = 'Expirado'"
-    if f_g_exp != "Todos": query_exp += f" AND grupo_nome = '{f_g_exp}'"
+    params_exp = []
+    if f_g_exp != "Todos": 
+        query_exp += " AND grupo_id = ?"
+        params_exp.append(f_g_exp)
     
-    df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn)
+    df_exp = pd.read_sql_query(query_exp + " ORDER BY id DESC", conn, params=params_exp)
     
     if not df_exp.empty:
         df_exp.replace("Aguardando Entrada", "Não Iniciado", inplace=True)
@@ -306,20 +315,28 @@ elif aba == "📜 Expirados":
 
 elif aba == "👤 Perfil do Cliente":
     st.title("👤 Dossiê do Cliente")
-    df_g = pd.read_sql_query("SELECT DISTINCT grupo_nome FROM membros", conn)
-    f_g_p = st.selectbox("Filtrar por Grupo:", ["Todos"] + list(df_g['grupo_nome'].unique()))
+    # Filtro seguro por grupo_id
+    df_g = pd.read_sql_query("SELECT DISTINCT grupo_id, grupo_nome FROM membros", conn)
+    dict_g_p = dict(zip(df_g['grupo_id'], df_g['grupo_nome']))
+    f_g_p = st.selectbox("Filtrar por Grupo:", ["Todos"] + list(dict_g_p.keys()), format_func=lambda x: "Todos" if x == "Todos" else dict_g_p[x])
     
     query_p = "SELECT DISTINCT user_id, nome FROM membros"
-    if f_g_p != "Todos": query_p += f" WHERE grupo_nome = '{f_g_p}'"
+    params_p = []
+    if f_g_p != "Todos": 
+        query_p += " WHERE grupo_id = ?"
+        params_p.append(f_g_p)
     
-    df_u = pd.read_sql_query(query_p, conn)
+    df_u = pd.read_sql_query(query_p, conn, params=params_p)
     if not df_u.empty:
-        cliente = st.selectbox("Escolha o Cliente:", df_u['nome'])
-        uid = df_u[df_u['nome'] == cliente]['user_id'].values[0]
+        # SELEÇÃO BLINDADA: Busca pelo user_id nativo, não importa se existem 5 pessoas com o mesmo nome
+        dict_u = {r['user_id']: f"{r['nome']} (ID: {r['user_id']})" for _, r in df_u.iterrows()}
+        uid = st.selectbox("Escolha o Cliente:", list(dict_u.keys()), format_func=lambda x: dict_u[x])
+        
         dados = pd.read_sql_query("SELECT * FROM membros WHERE user_id = ?", conn, params=(uid,))
         
         with st.container(border=True):
-            st.subheader(f"Ficha: {cliente}")
+            cliente_nome = dados.iloc[0]['nome']
+            st.subheader(f"Ficha: {cliente_nome}")
             c1, c2 = st.columns(2)
             c1.write(f"**Username:** {dados['username'].iloc[0]}")
             c1.write(f"**ID:** {uid}")
