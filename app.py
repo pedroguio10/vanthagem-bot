@@ -138,7 +138,7 @@ if "bloqueado_ate" not in st.session_state:
     st.session_state.bloqueado_ate = None
 
 def login():
-    st.markdown("<h1 style='text-align: center;'>🔐 Vanthagem PRO</h1>", unsafe_html=True)
+    st.markdown("<h1 style='text-align: center;'>🔐 Vanthagem PRO</h1>", unsafe_allow_html=True)
     if st.session_state.bloqueado_ate:
         tempo_restante = st.session_state.bloqueado_ate - datetime.now()
         if tempo_restante.total_seconds() > 0:
