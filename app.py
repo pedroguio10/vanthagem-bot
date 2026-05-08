@@ -127,6 +127,46 @@ if not hasattr(st, "bot_rodando"):
 
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Vanthagem PRO", layout="wide")
+# --- SISTEMA DE SEGURANÇA (ADMIN) ---
+SENHA_CORRETA = "29072004pP1!"
+
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+if "tentativas" not in st.session_state:
+    st.session_state.tentativas = 0
+if "bloqueado_ate" not in st.session_state:
+    st.session_state.bloqueado_ate = None
+
+def login():
+    st.markdown("<h1 style='text-align: center;'>🔐 Vanthagem PRO</h1>", unsafe_html=True)
+    if st.session_state.bloqueado_ate:
+        tempo_restante = st.session_state.bloqueado_ate - datetime.now()
+        if tempo_restante.total_seconds() > 0:
+            st.error(f"Sistema bloqueado. Tente novamente em {int(tempo_restante.total_seconds() // 60)} minutos.")
+            st.stop()
+        else:
+            st.session_state.bloqueado_ate = None
+            st.session_state.tentativas = 0
+
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        with st.form("login_form"):
+            senha_input = st.text_input("Senha Master", type="password")
+            if st.form_submit_button("Acessar Sistema", use_container_width=True):
+                time.sleep(5) # Proteção de Flood
+                if senha_input == SENHA_CORRETA:
+                    st.session_state.autenticado = True
+                    st.session_state.tentativas = 0
+                    st.rerun()
+                else:
+                    st.session_state.tentativas += 1
+                    if st.session_state.tentativas >= 5:
+                        st.session_state.bloqueado_ate = datetime.now() + timedelta(minutes=30)
+                    st.rerun()
+
+if not st.session_state.autenticado:
+    login()
+    st.stop()
 
 def sincronizar_dados():
     try:
