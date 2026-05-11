@@ -7,7 +7,7 @@ import threading
 import time
 
 # --- CONFIGURAÇÕES DO BOT ---
-TOKEN = '8506261472:AAEFl-coVYJtnVjlILf04n5WJlaMNgqDv84'
+TOKEN = '8254988821:AAGjPi9XG0Lg1km1FC6UxJbFP0RDCgAW2NY'
 bot = telebot.TeleBot(TOKEN)
 
 # --- FUNÇÃO DE HORÁRIO BRASÍLIA ---
